@@ -1,14 +1,11 @@
 #include <LedControl.h> // Incluye la librería para el display MAX7219
 
 // Configuración de pines para el display MAX7219
-// Puedes usar cualquier pin digital disponible. Aquí usamos los que liberamos.
-#define DIN_PIN 42 // Pin DIN del display conectado a D42 del Arduino
-#define CLK_PIN 43 // Pin CLK del display conectado a D43 del Arduino
-#define CS_PIN 44  // Pin CS (LOAD) del display conectado a D44 del Arduino
+#define DIN_PIN 42
+#define CLK_PIN 43
+#define CS_PIN 44
 
-// Crea una instancia del objeto LedControl
-// Los parámetros son: (PIN_DIN, PIN_CLK, PIN_CS, número_de_modulos_MAX7219)
-// Asumimos 1 módulo de 7 segmentos/matriz de LEDs
+// Instancia del objeto LedControl
 LedControl lc = LedControl(DIN_PIN, CLK_PIN, CS_PIN, 1);
 
 String input = ""; // Buffer para la entrada serial
@@ -30,7 +27,7 @@ int pinesBotonDecremento[NUM_DESTINOS] = {37, 38, 39, 40, 41};
 bool botonesDecrementoEstadoAnterior[NUM_DESTINOS] = {false};
 
 // Variable para almacenar la orden de venta que se muestra actualmente
-// El display MAX7219 es para números/segmentos, no puede mostrar texto complejo fácilmente.
+// El display MAX7219 es para números/segmentos, no puede mostrar texto.
 // Esta variable nos ayudará a saber a qué OV corresponden las piezas mostradas.
 int currentDisplayedOV = 0;
 
@@ -44,11 +41,11 @@ void setup() {
   // Inicializa el display MAX7219
   // Establece el número de dígitos a escanear (0 a 7 para 1-8 dígitos)
   lc.shutdown(0, false); // Saca el display del modo de ahorro de energía (0 = primer módulo)
-  lc.setIntensity(0, 8); // Establece el brillo (0 = primer módulo, 0-15 brillo)
+  lc.setIntensity(0, 1); // Establece el brillo (0 = primer módulo, 0-15 brillo)
   lc.clearDisplay(0); // Limpia el display (0 = primer módulo)
 
   // Muestra "0" en todos los dígitos al inicio
-  for (int i = 0; i < 8; i++) { // Asumiendo un display de 8 dígitos
+  for (int i = 0; i < 8; i++) {
     lc.setDigit(0, i, 0, false); // (módulo, dígito, valor, puntoDecimal)
   }
 
@@ -145,7 +142,7 @@ void procesarComando(String comando) {
       Serial.println(destino);
     }
   }
-  // --- NUEVOS COMANDOS PARA EL DISPLAY MAX7219 ---
+  // --- NUEVOS COMANDOS PARA MAX7219 ---
   else if (comando.startsWith("DISPLAY_OV_")) {
     // Formato esperado: "DISPLAY_OV_X_PIEZAS_Y"
     int ovIndex = comando.indexOf("_OV_");
@@ -160,8 +157,6 @@ void procesarComando(String comando) {
 
       currentDisplayedOV = ordenDeVenta; // Guarda la OV actual
 
-      // El MAX7219 es ideal para mostrar números. Podemos mostrar las piezas.
-      // Si tienes un display de 8 dígitos, el número puede ser bastante grande.
       // La función printNumberFromRight() mostrará el número justificado a la derecha.
       printNumberFromRight(piezas);
       Serial.print("DISPLAY_ACTUALIZADO_OV_");
@@ -179,7 +174,6 @@ void procesarComando(String comando) {
       int ordenDeVenta = ovStr.toInt();
       int nuevoValor = valorStr.toInt();
 
-      // Solo actualiza el display si la OV que se está ajustando es la que se mostró por última vez
       if (ordenDeVenta == currentDisplayedOV) {
           printNumberFromRight(nuevoValor); // Muestra el nuevo valor de piezas
           Serial.print("PIEZAS_AJUSTADAS_OV_");
@@ -196,13 +190,7 @@ void procesarComando(String comando) {
     currentDisplayedOV = 0; // Reinicia la OV mostrada
   } else if (comando == "DISPLAY_MESSAGE_COMPLETADO") {
     lc.clearDisplay(0);
-    // Para un MAX7219 con 7 segmentos, puedes mostrar "done" o un patrón.
-    // Aquí una forma simple de mostrar "done" si es un display de 4 o más dígitos
-    // Los caracteres 'd', 'o', 'n', 'e' pueden ser mapeados a los segmentos.
-    // La librería LedControl no tiene setChar directo para todas las letras,
-    // pero puedes definir tus propios patrones de segmentos si lo necesitas.
-    // Por simplicidad, podemos mostrar "8888" o "0000" o dejarlo en blanco.
-    // O un simple "done" si el display es de 4 dígitos:
+
     lc.setChar(0, 3, 'd', false); // d
     lc.setChar(0, 2, 'o', false); // o
     lc.setChar(0, 1, 'n', false); // n
@@ -232,7 +220,7 @@ void printNumberFromRight(long number) {
   }
 
   int digit = 0;
-  while (number > 0 && digit < 8) { // Asume hasta 8 dígitos
+  while (number > 0 && digit < 8) {
     lc.setDigit(0, digit, number % 10, false);
     number /= 10;
     digit++;
