@@ -25,7 +25,7 @@ struct EntradaProducto {
 };
 
 // Alias para facilitar la lectura del código
-using Producto = std::vector<EntradaProducto>; // Múltiples entradas por SKU
+using Producto = std::vector<EntradaProducto>;
 
 // Handle global para el puerto serial de Arduino
 HANDLE arduino;
@@ -232,16 +232,6 @@ void processInputMessage(const std::string& mensaje, std::set<int>& pendientes,
             if (pendientes.count(ordenDeVentaConfirmada)) {
                 pendientes.erase(ordenDeVentaConfirmada);
                 enviarAArduino("APAGAR_DESTINO_" + std::to_string(ordenDeVentaConfirmada));
-                // --- NUEVO: Limpiar display o mostrar mensaje de confirmación si es el único display ---
-                // Para una configuración con un solo display, podrías querer borrar o mostrar un mensaje "Confirmado!"
-                // Si hay múltiples displays, esto sería más complejo y específico para cada display.
-                // Aquí, asumo que quieres borrar la pantalla para prepararte para el siguiente scan.
-                // Si quieres mostrar un mensaje "Confirmado", el Arduino debería manejarlo.
-                // De momento, simplemente no se envía nada para el display en esta parte, asumiendo que el Arduino
-                // cambiará a un estado de "Listo para escanear" cuando no haya LEDs encendidos.
-                // Una opción más específica: enviarAArduino("CLEAR_DISPLAY"); si el Arduino lo implementa.
-                // No lo he incluido en el Arduino para no sobrecargar el ejemplo, pero podrías hacerlo.
-                // Por ahora, se asume que el display se actualizará con el siguiente producto.
                 
                 int original_piezas = piezasOriginales[ordenDeVentaConfirmada]; // Renombrado
                 int final_piezas = piezasAjustadas[ordenDeVentaConfirmada];
@@ -286,7 +276,7 @@ void processInputMessage(const std::string& mensaje, std::set<int>& pendientes,
                 }
                 std::cout << "[DISPLAY ORDEN DE VENTA " << destino << "]: " << actual << std::endl;
                 // --- NUEVO: Enviar el valor ajustado al display ---
-                ajustarPiezasDisplay(destino, actual); // Usa la nueva función
+                ajustarPiezasDisplay(destino, actual);
             } else {
                 std::cout << "Orden de venta " << destino << " (para ajuste +/-) no válida o ya confirmada.\n";
             }
@@ -362,9 +352,9 @@ int main() {
         bool solicitar_salida_programa = false; 
 
         if (productos.count(sku_scan)) {
-            auto& entradas_producto = productos[sku_scan]; // Renombrado
-            std::vector<EntradaProducto> entradasValidas_producto; // Renombrado
-            for (const auto& entrada_csv : entradas_producto) { // Renombrado
+            auto& entradas_producto = productos[sku_scan];
+            std::vector<EntradaProducto> entradasValidas_producto;
+            for (const auto& entrada_csv : entradas_producto) {
                 if (entrada_csv.lote == lote_scan) {
                     entradasValidas_producto.push_back(entrada_csv);
                 }
@@ -375,11 +365,11 @@ int main() {
                 continue;
             }
 
-            std::set<int> pendientes_producto; // Renombrado
-            std::map<int, int> piezasAjustadas_producto; // Renombrado
-            std::map<int, int> piezasOriginales_producto; // Renombrado
+            std::set<int> pendientes_producto;
+            std::map<int, int> piezasAjustadas_producto;
+            std::map<int, int> piezasOriginales_producto;
 
-            for (const auto& entrada_valida : entradasValidas_producto) { // Renombrado
+            for (const auto& entrada_valida : entradasValidas_producto) {
                 int odv = entrada_valida.ordenDeVenta;
                 pendientes_producto.insert(odv);
                 piezasOriginales_producto[odv] = entrada_valida.piezas;
@@ -387,20 +377,20 @@ int main() {
                 std::cout << "Activando ORDEN DE VENTA " << odv << " - Piezas: " << entrada_valida.piezas << " - Lote: " << entrada_valida.lote << std::endl;
                 enviarAArduino("ENCENDER_DESTINO_" + std::to_string(odv));
                 // --- NUEVO: Enviar el número de piezas al display para la OV activa ---
-                enviarDatosDisplay(odv, entrada_valida.piezas); // Usa la nueva función
+                enviarDatosDisplay(odv, entrada_valida.piezas); //Nueva función
             }
 
             std::cout << "DEBUG: Contenido inicial de 'pendientes_producto': { ";
-            bool first_m_print = true; // Renombrado
-            for (int ov_val : pendientes_producto) { // Renombrado
+            bool first_m_print = true;
+            for (int ov_val : pendientes_producto) {
                 if(!first_m_print) std::cout << ", ";
                 std::cout << ov_val;
                 first_m_print = false;
             }
             std::cout << " }" << std::endl;
 
-            bool finalizar_scan_actual = false; // Renombrado de current_scan_finished
-            bool prompt_mostrado_ciclo = false; // Renombrado
+            bool finalizar_scan_actual = false;
+            bool prompt_mostrado_ciclo = false;
 
             while (!pendientes_producto.empty() && !finalizar_scan_actual && continuar_programa) {
                 std::string mensajeRecibido = obtenerMensajeSerial();
@@ -438,8 +428,7 @@ int main() {
                             finalizar_scan_actual = true;
                             std::cout << "Saliendo del producto actual..." << std::endl;
                             // --- NUEVO: Limpiar display al salir del producto actual ---
-                            enviarAArduino("CLEAR_DISPLAY"); // Asumiendo que el Arduino tiene una implementación para esto
-                            // Si no tienes CLEAR_DISPLAY en Arduino, el display simplemente mantendrá el último valor hasta el siguiente scan.
+                            enviarAArduino("CLEAR_DISPLAY");
                         } else {
                              // "salir" (para todo el programa) se maneja dentro de processInputMessage
                              processInputMessage(inputManual, pendientes_producto, piezasOriginales_producto, piezasAjustadas_producto, sku_scan, lote_scan, solicitar_salida_programa);
@@ -470,8 +459,8 @@ int main() {
             } else if (pendientes_producto.empty()) {
                 std::cout << "Todas las órdenes del producto '" << sku_scan << "' Lote '" << lote_scan << "' han sido procesadas." << std::endl;
                 // --- NUEVO: Mensaje de "Todas las OVs procesadas" en display ---
-                enviarAArduino("CLEAR_DISPLAY"); // Limpia
-                enviarAArduino("DISPLAY_MESSAGE_COMPLETADO"); // Si implementas esta función en Arduino
+                enviarAArduino("CLEAR_DISPLAY");
+                enviarAArduino("DISPLAY_MESSAGE_COMPLETADO");
             }
             
             // Si 'salir_programa' se activó (solicitar_salida_programa es true y continuar_programa es false)
@@ -479,7 +468,7 @@ int main() {
                 break; // Rompe el bucle exterior while(continuar_programa)
             }
             
-            std::string opcion_continuar; // Renombrado
+            std::string opcion_continuar;
             std::cout << "¿Deseas escanear otro producto? (s/n) o escribe 'salir_programa': ";
             std::getline(std::cin, opcion_continuar); 
             opcion_continuar = trim(opcion_continuar);
