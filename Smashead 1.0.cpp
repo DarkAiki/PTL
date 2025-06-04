@@ -15,7 +15,7 @@
 #include <mutex>     // Para proteger el acceso a las variables compartidas entre hilos
 #include <queue>     // Para almacenar los mensajes recibidos del Arduino
 #include <limits>    // Para std::numeric_limits
-#include <cctype>    // Para isprint // NUEVO: Necesario para isprint
+#include <cctype>    // Para isprint
 
 // Estructura para representar una entrada de producto
 struct EntradaProducto {
@@ -38,67 +38,67 @@ std::queue<std::string> colaMensajesRecibidos;
 bool hiloLecturaActivo = true;
 
 // Prototipo de la función auxiliar de procesamiento de mensajes
-// Se define aquí para que main() y otras funciones puedan usarla
 void processInputMessage(const std::string& mensaje, std::set<int>& pendientes,
                          std::map<int, int>& piezasOriginales, std::map<int, int>& piezasAjustadas,
                          const std::string& sku, const std::string& lote, bool& loop_break);
 
 // Función para inicializar el puerto serial
 bool inicializarPuertoSerial(const std::string& puerto) {
-    // Abre el puerto serial
     arduino = CreateFileA(puerto.c_str(), GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
     if (arduino == INVALID_HANDLE_VALUE) {
-        std::cerr << "No se pudo abrir el puerto serial. Asegúrate de que el puerto COM3 esté disponible y el Monitor Serial de Arduino IDE esté cerrado." << std::endl;
+        std::cerr << "No se pudo abrir el puerto serial. Asegúrate de que el puerto COM esté disponible y el Monitor Serial de Arduino IDE esté cerrado." << std::endl;
         return false;
     }
-
-    // Configura los parámetros del puerto serial (BaudRate, ByteSize, StopBits, Parity)
     DCB dcbSerialParams = {0};
     dcbSerialParams.DCBlength = sizeof(dcbSerialParams);
-
     if (!GetCommState(arduino, &dcbSerialParams)) {
         std::cerr << "Error obteniendo configuración del puerto." << std::endl;
         CloseHandle(arduino);
         return false;
     }
-
-    dcbSerialParams.BaudRate = CBR_9600; // Tasa de baudios: DEBE COINCIDIR con el Arduino
-    dcbSerialParams.ByteSize = 8;       // Bits de datos
-    dcbSerialParams.StopBits = ONESTOPBIT; // Bits de parada
-    dcbSerialParams.Parity   = NOPARITY;   // Paridad
-
+    dcbSerialParams.BaudRate = CBR_9600;
+    dcbSerialParams.ByteSize = 8;
+    dcbSerialParams.StopBits = ONESTOPBIT;
+    dcbSerialParams.Parity   = NOPARITY;
     if (!SetCommState(arduino, &dcbSerialParams)) {
         std::cerr << "Error configurando el puerto." << std::endl;
         CloseHandle(arduino);
         return false;
     }
-
-    // Configura los timeouts para las operaciones de lectura/escritura
     COMMTIMEOUTS timeouts = {0};
-    timeouts.ReadIntervalTimeout = 50;         // Máximo tiempo entre caracteres (ms)
-    timeouts.ReadTotalTimeoutConstant = 50;    // Tiempo adicional por lectura (ms)
-    timeouts.ReadTotalTimeoutMultiplier = 10;  // Multiplicador por byte para lectura (ms)
-    timeouts.WriteTotalTimeoutConstant = 50;   // Tiempo adicional por escritura (ms)
-    timeouts.WriteTotalTimeoutMultiplier = 10; // Multiplicador por byte para escritura (ms)
-
+    timeouts.ReadIntervalTimeout = 50;
+    timeouts.ReadTotalTimeoutConstant = 50;
+    timeouts.ReadTotalTimeoutMultiplier = 10;
+    timeouts.WriteTotalTimeoutConstant = 50;
+    timeouts.WriteTotalTimeoutMultiplier = 10;
     if (!SetCommTimeouts(arduino, &timeouts)) {
         std::cerr << "Error configurando timeouts del puerto." << std::endl;
         CloseHandle(arduino);
         return false;
     }
-
     return true;
 }
 
 // Función para enviar un mensaje al Arduino
 void enviarAArduino(const std::string& mensaje) {
-    // Agrega un salto de línea al final del mensaje, como espera el Arduino
     std::string mensajeConSalto = mensaje + "\n";
     DWORD bytesEscritos;
-    // Escribe el mensaje en el puerto serial
     WriteFile(arduino, mensajeConSalto.c_str(), mensajeConSalto.size(), &bytesEscritos, NULL);
     std::cout << "[ARDUINO <- PC] Enviando: " << mensaje << std::endl;
 }
+
+// --- NUEVA FUNCIÓN PARA ENVIAR DATOS AL DISPLAY ---
+void enviarDatosDisplay(int ordenDeVenta, int piezas) {
+    std::string mensaje = "DISPLAY_OV_" + std::to_string(ordenDeVenta) + "_PIEZAS_" + std::to_string(piezas);
+    enviarAArduino(mensaje);
+}
+
+// --- NUEVA FUNCIÓN PARA AJUSTAR PIEZAS EN EL DISPLAY ---
+void ajustarPiezasDisplay(int ordenDeVenta, int nuevoValor) {
+    std::string mensaje = "AJUSTAR_OV_" + std::to_string(ordenDeVenta) + "_VALOR_" + std::to_string(nuevoValor);
+    enviarAArduino(mensaje);
+}
+
 
 // Función para eliminar espacios en blanco y saltos de línea al inicio y final de una cadena
 std::string trim(const std::string& str) {
@@ -110,49 +110,40 @@ std::string trim(const std::string& str) {
 
 // Hilo para leer continuamente del puerto serial
 void leerDeArduino() {
-    char buffer[256]; // Buffer para los datos recibidos
-    DWORD bytesLeidos; // Número de bytes leídos
-    std::string serialBuffer = ""; // Buffer para acumular caracteres hasta un salto de línea
-
+    char buffer[256];
+    DWORD bytesLeidos;
+    std::string serialBuffer = "";
     while (hiloLecturaActivo) {
-        // Intenta leer del puerto serial
         if (ReadFile(arduino, buffer, sizeof(buffer) - 1, &bytesLeidos, NULL)) {
             if (bytesLeidos > 0) {
-                buffer[bytesLeidos] = '\0'; // Null-terminate el buffer para tratarlo como string
-                serialBuffer += buffer; // Añade los bytes leídos al buffer acumulador
-
-                // Procesa el buffer acumulador línea por línea
+                buffer[bytesLeidos] = '\0';
+                serialBuffer += buffer;
                 size_t newlinePos;
                 while ((newlinePos = serialBuffer.find('\n')) != std::string::npos) {
                     std::string linea = serialBuffer.substr(0, newlinePos);
-                    serialBuffer.erase(0, newlinePos + 1); // Elimina la línea procesada del buffer
-
-                    linea = trim(linea); // Elimina espacios y retornos de carro
-
+                    serialBuffer.erase(0, newlinePos + 1);
+                    linea = trim(linea);
                     if (!linea.empty()) {
                         std::cout << "[PC <- ARDUINO] Recibido: " << linea << std::endl;
-                        // Protege el acceso a la cola con un mutex antes de añadir el mensaje
                         std::lock_guard<std::mutex> lock(mtx);
                         colaMensajesRecibidos.push(linea);
                     }
                 }
             }
         }
-        // Pequeña pausa para no saturar la CPU
-        std::this_thread::sleep_for(std::chrono::milliseconds(1)); // Reducido para mayor reactividad
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 }
 
 // Función para obtener un mensaje de la cola de mensajes seriales
 std::string obtenerMensajeSerial() {
-    // Protege el acceso a la cola con un mutex
     std::lock_guard<std::mutex> lock(mtx);
     if (!colaMensajesRecibidos.empty()) {
         std::string mensaje = colaMensajesRecibidos.front();
         colaMensajesRecibidos.pop();
         return mensaje;
     }
-    return ""; // Retorna una cadena vacía si no hay mensajes
+    return "";
 }
 
 // Función para registrar backorders en un archivo CSV
@@ -175,121 +166,127 @@ std::map<std::string, Producto> cargarProductosDesdeCSV(const std::string& archi
         std::cerr << "No se pudo abrir el archivo: " << archivo << std::endl;
         return productos;
     }
-
-    std::getline(file, linea); // Ignorar el encabezado del CSV
-
+    std::getline(file, linea); // Ignorar encabezado
     while (std::getline(file, linea)) {
         std::stringstream ss(linea);
-        std::string sku, lote, ordenStr, piezasStr;
-
-        std::getline(ss, sku, ',');
-        std::getline(ss, lote, ',');
+        std::string sku_csv, lote_csv, ordenStr, piezasStr;
+        std::getline(ss, sku_csv, ',');
+        std::getline(ss, lote_csv, ',');
         std::getline(ss, ordenStr, ',');
         std::getline(ss, piezasStr, ',');
-
-        sku = trim(sku);
-        lote = trim(lote);
+        sku_csv = trim(sku_csv);
+        lote_csv = trim(lote_csv);
         ordenStr = trim(ordenStr);
-        piezasStr = trim(trim(piezasStr)); // Doble trim por si acaso
-
-        if (sku.empty() || lote.empty() || ordenStr.empty() || piezasStr.empty()) {
+        piezasStr = trim(trim(piezasStr));
+        if (sku_csv.empty() || lote_csv.empty() || ordenStr.empty() || piezasStr.empty()) {
             std::cerr << "Línea con formato incorrecto (se ignorará): " << linea << std::endl;
             continue;
         }
-
-        int ordenDeVenta = std::stoi(ordenStr);
-        int piezas = std::stoi(piezasStr);
-
-        productos[sku].push_back({ordenDeVenta, piezas, lote});
+        try {
+            int ordenDeVenta = std::stoi(ordenStr);
+            int piezas = std::stoi(piezasStr);
+            productos[sku_csv].push_back({ordenDeVenta, piezas, lote_csv});
+        } catch (const std::exception& e) {
+            std::cerr << "Error convirtiendo datos de CSV en línea: " << linea << " - " << e.what() << std::endl;
+        }
     }
-
     return productos;
 }
 
-// Función auxiliar para procesar los mensajes (ya sea de Arduino o entrada manual)
+// Función auxiliar para procesar los mensajes
 void processInputMessage(const std::string& mensaje, std::set<int>& pendientes,
                          std::map<int, int>& piezasOriginales, std::map<int, int>& piezasAjustadas,
-                         const std::string& sku, const std::string& lote, bool& loop_break) {
+                         const std::string& sku, const std::string& lote, bool& loop_break) { // loop_break es pasada por referencia
     
-    // El comando "salir" se maneja en el bucle principal porque afecta el 'break'
-    // También se puede manejar aquí para una salida más directa desde esta función si es necesario.
     if (mensaje == "salir") {
-        loop_break = true; // Indica al bucle principal que debe salir
-        std::cout << "PROCESS_INPUT_MSG: Comando 'salir' recibido." << std::endl; // NUEVO DEBUG
+        loop_break = true; // Modifica la variable original en main()
+        std::cout << "PROCESS_INPUT_MSG: Comando 'salir' (programa) recibido." << std::endl;
         return;
     }
 
-    // --- NUEVO DEBUG DETALLADO ---
     std::cout << "PROCESS_INPUT_MSG: Entrando con mensaje: '";
-    for (char c : mensaje) { // Imprimir caracteres uno por uno para ver invisibles
+    for (char c : mensaje) {
         if (isprint(c)) {
             std::cout << c;
         } else {
-            std::cout << "[" << static_cast<int>(static_cast<unsigned char>(c)) << "]"; // Muestra código ASCII de no imprimibles
+            std::cout << "[" << static_cast<int>(static_cast<unsigned char>(c)) << "]";
         }
     }
     std::cout << "' (Longitud: " << mensaje.length() << ")" << std::endl;
     std::cout << "PROCESS_INPUT_MSG: 'pendientes' actualmente contiene: { ";
-    bool first_p = true;
-    for (int p : pendientes) {
-        if (!first_p) std::cout << ", ";
-        std::cout << p;
-        first_p = false;
+    bool first_p_print = true; // Renombrado para evitar colisión si 'first_p' se usa en otro lugar
+    for (int p_val : pendientes) { // Renombrado para evitar colisión
+        if (!first_p_print) std::cout << ", ";
+        std::cout << p_val;
+        first_p_print = false;
     }
     std::cout << " }" << std::endl;
-    // --- FIN NUEVO DEBUG DETALLADO ---
 
     if (mensaje.rfind("boton_", 0) == 0) {
-        std::cout << "PROCESS_INPUT_MSG: Mensaje COMIENZA con 'boton_'." << std::endl; // NUEVO DEBUG
-        int ordenDeVentaConfirmada = 0; // Inicializar por si stoi falla
-        try { // --- NUEVO TRY-CATCH ---
+        std::cout << "PROCESS_INPUT_MSG: Mensaje COMIENZA con 'boton_'." << std::endl;
+        int ordenDeVentaConfirmada = 0;
+        try {
             ordenDeVentaConfirmada = std::stoi(mensaje.substr(6));
             std::cout << "DEBUG: Procesando boton_" << ordenDeVentaConfirmada << ". Orden parseada: " << ordenDeVentaConfirmada << std::endl;
             std::cout << "DEBUG: Resultado de pendientes.count(" << ordenDeVentaConfirmada << "): " << pendientes.count(ordenDeVentaConfirmada) << " (1=encontrado, 0=no encontrado)" << std::endl;
-
-            if (pendientes.count(ordenDeVentaConfirmada)) { // Usa count para verificar existencia
-                pendientes.erase(ordenDeVentaConfirmada); // Elimina la orden de venta de pendientes
+            if (pendientes.count(ordenDeVentaConfirmada)) {
+                pendientes.erase(ordenDeVentaConfirmada);
                 enviarAArduino("APAGAR_DESTINO_" + std::to_string(ordenDeVentaConfirmada));
-                int original = piezasOriginales[ordenDeVentaConfirmada];
-                int final = piezasAjustadas[ordenDeVentaConfirmada];
-                registrarBackorder(sku, ordenDeVentaConfirmada, original, final, lote);
-                std::cout << "ORDEN DE VENTA " << ordenDeVentaConfirmada << " confirmada con piezas: " << final << ".\n";
+                // --- NUEVO: Limpiar display o mostrar mensaje de confirmación si es el único display ---
+                // Para una configuración con un solo display, podrías querer borrar o mostrar un mensaje "Confirmado!"
+                // Si hay múltiples displays, esto sería más complejo y específico para cada display.
+                // Aquí, asumo que quieres borrar la pantalla para prepararte para el siguiente scan.
+                // Si quieres mostrar un mensaje "Confirmado", el Arduino debería manejarlo.
+                // De momento, simplemente no se envía nada para el display en esta parte, asumiendo que el Arduino
+                // cambiará a un estado de "Listo para escanear" cuando no haya LEDs encendidos.
+                // Una opción más específica: enviarAArduino("CLEAR_DISPLAY"); si el Arduino lo implementa.
+                // No lo he incluido en el Arduino para no sobrecargar el ejemplo, pero podrías hacerlo.
+                // Por ahora, se asume que el display se actualizará con el siguiente producto.
+                
+                int original_piezas = piezasOriginales[ordenDeVentaConfirmada]; // Renombrado
+                int final_piezas = piezasAjustadas[ordenDeVentaConfirmada];
+                registrarBackorder(sku, ordenDeVentaConfirmada, original_piezas, final_piezas, lote);
+                std::cout << "ORDEN DE VENTA " << ordenDeVentaConfirmada << " confirmada con piezas: " << final_piezas << ".\n";
             } else {
-                // --- MODIFICADO DEBUG ELSE ---
                 std::cout << "Orden de venta " << ordenDeVentaConfirmada << " (parseada de '" << mensaje << "') NO ENCONTRADA en pendientes o ya confirmada.\n";
             }
         } catch (const std::invalid_argument& ia) {
-            std::cerr << "ERROR STOI (invalid_argument): No se pudo convertir '" << mensaje.substr(6) << "' a entero. Mensaje original: '" << mensaje << "'" << std::endl;
+            std::cerr << "ERROR STOI (boton_ invalid_argument): No se pudo convertir '" << mensaje.substr(6) << "' a entero. Mensaje original: '" << mensaje << "'" << std::endl;
         } catch (const std::out_of_range& oor) {
-            std::cerr << "ERROR STOI (out_of_range): Número fuera de rango en '" << mensaje.substr(6) << "'. Mensaje original: '" << mensaje << "'" << std::endl;
+            std::cerr << "ERROR STOI (boton_ out_of_range): Número fuera de rango en '" << mensaje.substr(6) << "'. Mensaje original: '" << mensaje << "'" << std::endl;
         }
-        // --- FIN NUEVO TRY-CATCH ---
-    }    
-    // Manejo de mensajes de confirmación de LED (ignoramos en este punto)
-    else if (mensaje.rfind("LED_ENCENDIDO_", 0) == 0 || mensaje.rfind("LED_APAGADO_", 0) == 0) {
-        // Ignorar estas confirmaciones para evitar "Entrada no válida"
-        std::cout << "PROCESS_INPUT_MSG: Mensaje de confirmacion LED ignorado: '" << mensaje << "'" << std::endl; // NUEVO DEBUG OPCIONAL
+    }    // Manejo de mensajes de confirmación de LED, DISPLAY_ACTUALIZADO, PIEZAS_AJUSTADAS (NUEVO)
+    else if (mensaje.rfind("LED_ENCENDIDO_", 0) == 0 || mensaje.rfind("LED_APAGADO_", 0) == 0 || 
+             mensaje.rfind("DISPLAY_ACTUALIZADO_OV_", 0) == 0 || mensaje.rfind("PIEZAS_AJUSTADAS_OV_", 0) == 0) {
+        std::cout << "PROCESS_INPUT_MSG: Mensaje de confirmacion de Arduino ignorado: '" << mensaje << "'" << std::endl;
     }
-    // Manejo del mensaje de inicio de Arduino (ignoramos para limpiar la consola)
     else if (mensaje == "Arduino: Iniciado.") {
-        // Ignorar
-        std::cout << "PROCESS_INPUT_MSG: Mensaje 'Arduino: Iniciado.' ignorado." << std::endl; // NUEVO DEBUG OPCIONAL
+        std::cout << "PROCESS_INPUT_MSG: Mensaje 'Arduino: Iniciado.' ignorado." << std::endl;
     }
     else if ((mensaje[0] == '+' || mensaje[0] == '-') && mensaje.length() > 1) {
         int destino = 0;
-        try { // --- NUEVO TRY-CATCH para +/- ---
+        try { 
             destino = std::stoi(mensaje.substr(1));
             if (pendientes.count(destino)) {
-                int& actual = piezasAjustadas[destino];
-                int original = piezasOriginales[destino];
+                int& actual = piezasAjustadas[destino];     
+                int original = piezasOriginales[destino]; 
+
                 if (mensaje[0] == '+') {
-                    actual = (actual + 1 > original) ? original : actual + 1; // No exceder el original
+                    if (actual >= original) { 
+                        actual = 0;           
+                    } else {
+                        actual++;             
+                    }
                 } else if (mensaje[0] == '-') {
-                    actual = (actual == 0) ? 0 : actual - 1; // No bajar de 0
+                    if (actual <= 0) {    
+                        actual = original;    
+                    } else {
+                        actual--;             
+                    }
                 }
                 std::cout << "[DISPLAY ORDEN DE VENTA " << destino << "]: " << actual << std::endl;
-                // Aquí podrías enviar un comando al Arduino para actualizar un display si tu hardware lo soporta
-                // enviarAArduino("ACTUALIZAR_DISPLAY_" + std::to_string(destino) + "_" + std::to_string(actual));
+                // --- NUEVO: Enviar el valor ajustado al display ---
+                ajustarPiezasDisplay(destino, actual); // Usa la nueva función
             } else {
                 std::cout << "Orden de venta " << destino << " (para ajuste +/-) no válida o ya confirmada.\n";
             }
@@ -298,202 +295,210 @@ void processInputMessage(const std::string& mensaje, std::set<int>& pendientes,
         } catch (const std::out_of_range& oor) {
             std::cerr << "ERROR STOI (+/- out_of_range): Número fuera de rango en '" << mensaje.substr(1) << "'. Mensaje original: '" << mensaje << "'" << std::endl;
         }
-        // --- FIN NUEVO TRY-CATCH para +/- ---
-    } else {
-        // Solo imprime si no es un mensaje vacío o un salto de línea residual
+    } 
+    else {
         if (!mensaje.empty() && mensaje != "\r") {    
-            std::cout << "Entrada no válida. Usa 'boton_X', '+X' o '-X'. Mensaje recibido: '" << mensaje << "'" << std::endl; // MODIFICADO DEBUG
+            std::cout << "Entrada no válida. Usa 'boton_X', '+X', '-X' o 'salir'. Mensaje recibido: '" << mensaje << "'" << std::endl;
         }
     }
 }
 
 
 int main() {
-    // Intenta inicializar el puerto serial
-    if (!inicializarPuertoSerial("\\\\.\\COM3")) { // Asegúrate que este es tu puerto COM correcto
-        return 1; // Sale si no se puede abrir el puerto
+    std::string puertoCom = "\\\\.\\COM3"; 
+    // Para hacerlo configurable:
+    // std::cout << "Ingresa el puerto COM (ej. \\\\.\\COM3 o /dev/ttyUSB0): ";
+    // std::getline(std::cin, puertoCom);
+    // puertoCom = trim(puertoCom);
+
+    if (!inicializarPuertoSerial(puertoCom)) {
+        return 1;
     }
 
-    // Inicia el hilo de lectura del puerto serial
     std::thread hiloLectura(leerDeArduino);
-
-    // Espera un poco para que el Arduino se reinicie y el puerto esté listo
     std::this_thread::sleep_for(std::chrono::seconds(2));
 
     std::string archivoCSV;
     std::cout << "Ingresa el nombre del archivo CSV con los productos: ";
-    std::cin >> archivoCSV;
-    // Limpiar el buffer de entrada después de leer el nombre del archivo
-    std::cin.clear(); // Limpiar banderas de error si las hubiera
-    // std::string dummy_line; // No necesitas declarar de nuevo si ya existe una global o la pasas
-    // std::getline(std::cin, dummy_line); // Consumir el resto de la línea (incluyendo el '\n')
-    std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n'); // Manera más robusta de limpiar buffer
+    std::getline(std::cin, archivoCSV); 
+    archivoCSV = trim(archivoCSV);
 
 
-    // Carga los productos desde el archivo CSV
     auto productos = cargarProductosDesdeCSV(archivoCSV);
     if (productos.empty()) {
-        std::cout << "No se cargaron productos. Saliendo...\n";
-        // Detiene el hilo de lectura y espera a que termine antes de salir
+        std::cout << "No se cargaron productos o el archivo '" << archivoCSV << "' no existe/está vacío. Saliendo...\n";
         hiloLecturaActivo = false;
-        if (hiloLectura.joinable()) hiloLectura.join(); // Asegurarse que es joinable
+        if (hiloLectura.joinable()) hiloLectura.join();
         CloseHandle(arduino);
         return 1;
     }
 
-    bool continuar = true;
-    while (continuar) {
-        std::string sku, lote;
-        std::cout << "\nEscanea un producto (SKU Lote) o escribe 'salir_programa' para terminar: "; // Modificado prompt
-        std::cin >> sku;
-        if (sku == "salir_programa") {
-            continuar = false;
-            break;
+    bool continuar_programa = true; // Renombrado de 'continuar' para claridad
+    while (continuar_programa) {
+        std::string sku_scan, lote_scan; 
+        std::cout << "\nEscanea un producto (SKU Lote) o escribe 'salir_programa' para terminar: ";
+        
+        std::string linea_entrada_main; // Renombrado
+        std::getline(std::cin, linea_entrada_main);
+        linea_entrada_main = trim(linea_entrada_main);
+        
+        // Manejar "salir_programa" aquí antes de intentar parsear SKU y Lote
+        if (linea_entrada_main == "salir_programa") {
+            continuar_programa = false;
+            break; // Sale del bucle while(continuar_programa)
         }
-        std::cin >> lote;
-        // Limpiar el buffer de entrada después de leer SKU y Lote
-        std::cin.clear(); // Limpiar banderas de error si las hubiera
-        // std::getline(std::cin, dummy_line); // Consumir el resto de la línea (incluyendo el '\n')
-        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n'); // Manera más robusta
 
+        std::stringstream ss_entrada_main(linea_entrada_main); // Renombrado
+        ss_entrada_main >> sku_scan >> lote_scan;
+        
+        sku_scan = trim(sku_scan); 
+        lote_scan = trim(lote_scan);
 
-        sku = trim(sku);
-        lote = trim(lote);
+        if (sku_scan.empty()){ 
+            continue; 
+        }
 
-        if (productos.count(sku)) { // Usa count para verificar si el SKU existe
-            auto& entradas = productos[sku];
-            std::vector<EntradaProducto> entradasValidas;
+        // Bandera para ser modificada por processInputMessage si se comanda "salir" (para todo el programa)
+        bool solicitar_salida_programa = false; 
 
-            // Filtra las entradas por lote
-            for (const auto& entrada : entradas) {
-                if (entrada.lote == lote) {
-                    entradasValidas.push_back(entrada);
+        if (productos.count(sku_scan)) {
+            auto& entradas_producto = productos[sku_scan]; // Renombrado
+            std::vector<EntradaProducto> entradasValidas_producto; // Renombrado
+            for (const auto& entrada_csv : entradas_producto) { // Renombrado
+                if (entrada_csv.lote == lote_scan) {
+                    entradasValidas_producto.push_back(entrada_csv);
                 }
             }
             
-            if (entradasValidas.empty()) {
-                std::cout << "No hay entradas para ese lote o el lote no coincide con el SKU.\n";
+            if (entradasValidas_producto.empty()) {
+                std::cout << "No hay entradas para el SKU '" << sku_scan << "' con el lote '" << lote_scan << "'.\n";
                 continue;
             }
 
-            std::set<int> pendientes; // Órdenes de venta pendientes de confirmación
-            std::map<int, int> piezasAjustadas; // Piezas ajustadas para cada orden de venta
-            std::map<int, int> piezasOriginales; // Piezas originales para cada orden de venta
+            std::set<int> pendientes_producto; // Renombrado
+            std::map<int, int> piezasAjustadas_producto; // Renombrado
+            std::map<int, int> piezasOriginales_producto; // Renombrado
 
-            // Activa las órdenes de venta y envía comandos al Arduino
-            for (const auto& entrada : entradasValidas) {
-                int odv = entrada.ordenDeVenta;
-                pendientes.insert(odv);
-                piezasOriginales[odv] = entrada.piezas;
-                piezasAjustadas[odv] = entrada.piezas;
-                std::cout << "Activando ORDEN DE VENTA " << odv << " - Piezas: " << entrada.piezas << " - Lote: " << entrada.lote << std::endl;
+            for (const auto& entrada_valida : entradasValidas_producto) { // Renombrado
+                int odv = entrada_valida.ordenDeVenta;
+                pendientes_producto.insert(odv);
+                piezasOriginales_producto[odv] = entrada_valida.piezas;
+                piezasAjustadas_producto[odv] = entrada_valida.piezas;
+                std::cout << "Activando ORDEN DE VENTA " << odv << " - Piezas: " << entrada_valida.piezas << " - Lote: " << entrada_valida.lote << std::endl;
                 enviarAArduino("ENCENDER_DESTINO_" + std::to_string(odv));
-                std::cout << "[DISPLAY ORDEN DE VENTA " << odv << "]: " << entrada.piezas << std::endl;
+                // --- NUEVO: Enviar el número de piezas al display para la OV activa ---
+                enviarDatosDisplay(odv, entrada_valida.piezas); // Usa la nueva función
             }
 
-            // --- DEBUG: Contenido inicial de 'pendientes' ---
-            std::cout << "DEBUG: Contenido inicial de 'pendientes': { ";
-            bool first_m = true;
-            for (int ov : pendientes) {
-                if(!first_m) std::cout << ", ";
-                std::cout << ov;
-                first_m = false;
+            std::cout << "DEBUG: Contenido inicial de 'pendientes_producto': { ";
+            bool first_m_print = true; // Renombrado
+            for (int ov_val : pendientes_producto) { // Renombrado
+                if(!first_m_print) std::cout << ", ";
+                std::cout << ov_val;
+                first_m_print = false;
             }
             std::cout << " }" << std::endl;
-            // --- FIN DEBUG ---
 
-            bool current_scan_finished = false; // Esta variable se pasa a processInputMessage para que pueda ser modificada
-            static bool prompt_displayed_this_cycle = false; // Para evitar imprimir el prompt muchas veces
+            bool finalizar_scan_actual = false; // Renombrado de current_scan_finished
+            bool prompt_mostrado_ciclo = false; // Renombrado
 
-            // Bucle para esperar confirmaciones de botones o ajustes de piezas
-            while (!pendientes.empty() && !current_scan_finished) {
-                std::string mensajeRecibido = obtenerMensajeSerial(); // (1) Intentar obtener mensaje del Arduino primero
+            while (!pendientes_producto.empty() && !finalizar_scan_actual && continuar_programa) {
+                std::string mensajeRecibido = obtenerMensajeSerial();
 
-                if (!mensajeRecibido.empty()) { // (A) Si hay un mensaje de Arduino, procesarlo
-                    prompt_displayed_this_cycle = false; // Resetear el prompt si se recibe algo serial
-                    // --- MODIFICADO DEBUG ---
+                if (!mensajeRecibido.empty()) {
+                    prompt_mostrado_ciclo = false;
                     std::cout << "DEBUG_SERIAL: Recibido de Arduino '" << mensajeRecibido << "' (Longitud: " << mensajeRecibido.length() << ")" << std::endl;
-                    processInputMessage(mensajeRecibido, pendientes, piezasOriginales, piezasAjustadas, sku, lote, current_scan_finished);
-                } else { // (B) Si no hay mensaje del Arduino, revisar entrada manual
-                    if (!prompt_displayed_this_cycle && !current_scan_finished) { // No mostrar prompt si ya terminamos
-                        std::cout << "[Esperando botón/comando o entrada manual ('salir' para terminar este producto)]: ";
-                        prompt_displayed_this_cycle = true;
+                    processInputMessage(mensajeRecibido, pendientes_producto, piezasOriginales_producto, piezasAjustadas_producto, sku_scan, lote_scan, solicitar_salida_programa);
+                } else {
+                    if (!prompt_mostrado_ciclo && !finalizar_scan_actual) {
+                        std::cout << "[Esperando botón/comando, 'salir_prod' (producto) o 'salir' (programa)]: ";
+                        prompt_mostrado_ciclo = true;
                     }
-
-                    std::string inputManual = "";
-                    // Esta parte necesita ser no bloqueante para que los mensajes seriales se sigan procesando
-                    // Usar std::cin.rdbuf()->in_avail() es una forma, pero puede ser dependiente de la plataforma/terminal
-                    // Una forma más simple para probar es un timeout corto en la espera de input manual
-                    // O reestructurar para que el input manual sea más explícito.
-                    // Por ahora, mantendremos la lógica de peek, pero puede ser menos reactiva.
-
-                    if (std::cin.rdbuf()->in_avail() > 0) { // Chequea si hay algo en el buffer de std::cin
-                        if (std::cin.peek() != EOF && std::cin.peek() != '\n') {
-                            std::getline(std::cin, inputManual); 
-                            inputManual = trim(inputManual);
-                            prompt_displayed_this_cycle = false; 
-                        } else {
-                            // Si solo hay un '\n' o EOF, consumir el '\n' si existe
-                            if(std::cin.peek() == '\n') std::cin.ignore();
+                    
+                    // --- DECLARACIÓN DE inputManual ESTÁ AQUÍ ---
+                    std::string inputManual = ""; 
+                    // --- FIN DE DECLARACIÓN ---
+                    
+                    if (std::cin.rdbuf()->in_avail() > 0) {
+                        char peek_char = std::cin.peek();
+                        if (peek_char != EOF) {
+                            if (peek_char != '\n') {
+                                std::getline(std::cin, inputManual); 
+                                inputManual = trim(inputManual);
+                            } else { 
+                                std::cin.get(); // Cambiado de std::cin.ignore()
+                            }
+                            prompt_mostrado_ciclo = false; 
                         }
                     }
 
-
-                    if (!inputManual.empty()) { // (C) Si se obtuvo entrada manual, procesarla
-                        // --- MODIFICADO DEBUG ---
+                    if (!inputManual.empty()) {
                         std::cout << "DEBUG_MANUAL: Ingresado manualmente '" << inputManual << "' (Longitud: " << inputManual.length() << ")" << std::endl;
-                        if (inputManual == "salir") { // Comando para salir del producto actual
-                            current_scan_finished = true; // Esto romperá el bucle interno
+                        if (inputManual == "salir_prod") { 
+                            finalizar_scan_actual = true;
                             std::cout << "Saliendo del producto actual..." << std::endl;
+                            // --- NUEVO: Limpiar display al salir del producto actual ---
+                            enviarAArduino("CLEAR_DISPLAY"); // Asumiendo que el Arduino tiene una implementación para esto
+                            // Si no tienes CLEAR_DISPLAY en Arduino, el display simplemente mantendrá el último valor hasta el siguiente scan.
                         } else {
-                             processInputMessage(inputManual, pendientes, piezasOriginales, piezasAjustadas, sku, lote, current_scan_finished);
+                             // "salir" (para todo el programa) se maneja dentro de processInputMessage
+                             processInputMessage(inputManual, pendientes_producto, piezasOriginales_producto, piezasAjustadas_producto, sku_scan, lote_scan, solicitar_salida_programa);
                         }
-                    } else { // (D) Si no hay mensajes de Arduino ni entrada manual, esperar un poco
-                        std::this_thread::sleep_for(std::chrono::milliseconds(20)); // Aumentado un poco el sleep
+                    } else {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(50)); 
                     }
                 }
-                if (current_scan_finished && pendientes.empty()) {
-                    std::cout << "Todas las órdenes procesadas o se indicó salir del producto actual." << std::endl;
-                } else if (current_scan_finished && !pendientes.empty()){
-                    std::cout << "Saliendo del producto actual, aun habían pendientes." << std::endl;
+                
+                if (solicitar_salida_programa) { 
+                    continuar_programa = false; 
+                    finalizar_scan_actual = true; // También finaliza el scan actual para salir de este bucle interno
                 }
+            } // Fin del bucle while (!pendientes_producto.empty()...)
+
+            // Lógica después de procesar un producto
+            if (solicitar_salida_programa) {
+                 std::cout << "Solicitud de finalización de programa procesada." << std::endl;
+                 // --- NUEVO: Limpiar display al finalizar el programa ---
+                 enviarAArduino("CLEAR_DISPLAY");
+            } else if (finalizar_scan_actual && !pendientes_producto.empty()){ // Si se usó "salir_prod" y quedaron pendientes
+                 std::cout << "ADVERTENCIA: El producto se interrumpió con las siguientes OVs aun activas: ";
+                 for (int ov_restante : pendientes_producto) {
+                     std::cout << ov_restante << " ";
+                     enviarAArduino("APAGAR_DESTINO_" + std::to_string(ov_restante)); 
+                 }
+                 std::cout << std::endl;
+            } else if (pendientes_producto.empty()) {
+                std::cout << "Todas las órdenes del producto '" << sku_scan << "' Lote '" << lote_scan << "' han sido procesadas." << std::endl;
+                // --- NUEVO: Mensaje de "Todas las OVs procesadas" en display ---
+                enviarAArduino("CLEAR_DISPLAY"); // Limpia
+                enviarAArduino("DISPLAY_MESSAGE_COMPLETADO"); // Si implementas esta función en Arduino
             }
-
-            // Si salimos del bucle y aún hay pendientes, podrías querer apagarlos o registrarlos
-            if (!pendientes.empty()) {
-                std::cout << "ADVERTENCIA: El producto se completó o se interrumpió con las siguientes OVs aun activas en 'pendientes': ";
-                for (int ov_restante : pendientes) {
-                    std::cout << ov_restante << " ";
-                    enviarAArduino("APAGAR_DESTINO_" + std::to_string(ov_restante)); // Apagar LEDs restantes
-                    // Decidir si registrar como no confirmado o con piezas 0
-                    // registrarBackorder(sku, ov_restante, piezasOriginales[ov_restante], 0, lote); 
-                }
-                std::cout << std::endl;
+            
+            // Si 'salir_programa' se activó (solicitar_salida_programa es true y continuar_programa es false)
+            if (!continuar_programa) {
+                break; // Rompe el bucle exterior while(continuar_programa)
             }
+            
+            std::string opcion_continuar; // Renombrado
+            std::cout << "¿Deseas escanear otro producto? (s/n) o escribe 'salir_programa': ";
+            std::getline(std::cin, opcion_continuar); 
+            opcion_continuar = trim(opcion_continuar);
 
-
-            std::string opcion;
-            std::cout << "¿Deseas escanear otro producto? (s/n) o 'salir_programa': ";
-            std::cin >> opcion;
-            opcion = trim(opcion);
-            // std::cin.clear(); // Ya no es necesario si usamos ignore() bien
-            // std::getline(std::cin, dummy_line); // Limpiar buffer después de la opción
-            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-
-
-            if (opcion == "salir_programa" || opcion == "n" || opcion == "N") {
-                continuar = false;
+            if (opcion_continuar == "salir_programa" || opcion_continuar == "n" || opcion_continuar == "N") {
+                continuar_programa = false;
+            } else if (opcion_continuar != "s" && opcion_continuar != "S") {
+                std::cout << "Opción no reconocida, se interpretará como 'sí' para continuar..." << std::endl;
             }
-        } else {
-            std::cout << "Producto no reconocido.\n";
+        } else { // Fin de if (productos.count(sku_scan))
+             if (!sku_scan.empty()) { 
+                std::cout << "Producto con SKU '" << sku_scan << "' no reconocido.\n";
+            }
         }
-    }
+    } // Fin del bucle while (continuar_programa)
 
     std::cout << "Programa finalizado.\n";
-    // Detiene el hilo de lectura y espera a que termine
     hiloLecturaActivo = false;
-    if (hiloLectura.joinable()) hiloLectura.join(); // Asegurarse que es joinable
-    // Cierra el handle del puerto serial
+    if (hiloLectura.joinable()) hiloLectura.join();
     CloseHandle(arduino);
     return 0;
 }
