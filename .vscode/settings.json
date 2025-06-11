@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "thread": "cpp",
+        "vector": "cpp",
+        "map": "cpp"
+    },
+    "C_Cpp.errorSquiggles": "disabled"
+}
