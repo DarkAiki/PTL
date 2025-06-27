@@ -1,4 +1,3 @@
-// C++ Standard Library
 #include <iostream>
 #include <map>
 #include <vector>
@@ -16,6 +15,7 @@
 #include <queue>
 #include <limits>
 #include <cctype>
+#include <iomanip> // Necesario para std::put_time
 #include <windows.h>
 
 // Estructura para representar una entrada de producto
@@ -26,7 +26,7 @@ struct EntradaProducto {
 };
 
 // Alias para facilitar la lectura del código
-using Producto = std::vector<EntradaProducto>; // Múltiples entradas por SKU
+using Producto = std::vector<EntradaProducto>;
 
 // Handle global para el puerto serial de Arduino
 HANDLE arduino;
@@ -41,7 +41,8 @@ bool hiloLecturaActivo = true;
 // Prototipo de la función auxiliar de procesamiento de mensajes
 void processInputMessage(const std::string& mensaje, std::set<int>& pendientes,
                          std::map<int, int>& piezasOriginales, std::map<int, int>& piezasAjustadas,
-                         const std::string& sku, const std::string& lote, bool& loop_break);
+                         const std::string& sku, const std::string& lote, bool& sesionTerminada,
+                         const std::string& backorderFilename); // Se añade el nombre del archivo
 
 // Función para inicializar el puerto serial
 bool inicializarPuertoSerial(const std::string& puerto) {
@@ -52,7 +53,7 @@ bool inicializarPuertoSerial(const std::string& puerto) {
         return false;
     }
 
-    // Configura los parámetros del puerto serial (BaudRate, ByteSize, StopBits, Parity)
+    // Configuración de los parámetros del puerto serial (BaudRate, ByteSize, StopBits, Parity)
     DCB dcbSerialParams = {0};
     dcbSerialParams.DCBlength = sizeof(dcbSerialParams);
 
@@ -62,7 +63,7 @@ bool inicializarPuertoSerial(const std::string& puerto) {
         return false;
     }
 
-    dcbSerialParams.BaudRate = CBR_9600; // Tasa de baudios: DEBE COINCIDIR con el Arduino
+    dcbSerialParams.BaudRate = CBR_9600;
     dcbSerialParams.ByteSize = 8;       // Bits de datos
     dcbSerialParams.StopBits = ONESTOPBIT; // Bits de parada
     dcbSerialParams.Parity   = NOPARITY;   // Paridad
@@ -157,14 +158,16 @@ std::string obtenerMensajeSerial() {
     return "";
 }
 
-// Función para registrar backorders en un archivo CSV
-void registrarBackorder(const std::string& sku, int ordenDeVenta, int piezasOriginales, int piezasFinales, const std::string& lote) {
-    std::ofstream archivo("backorders.csv", std::ios::app);
+// Función para registrar backorders en un archivo CSV.
+void registrarBackorder(const std::string& filename, const std::string& sku, int ordenDeVenta, int piezasOriginales, int piezasFinales, const std::string& lote) {
+    // Abre el archivo en modo de añadir (append). Como el nombre es único, la primera escritura creará el archivo.
+    std::ofstream archivo(filename, std::ios::app);
     if (!archivo.is_open()) {
-        std::cerr << "Error al abrir backorders.csv para escritura." << std::endl;
+        std::cerr << "Error al abrir " << filename << " para escritura." << std::endl;
         return;
     }
     
+    // Comprueba si el archivo está vacío para escribir el encabezado
     archivo.seekp(0, std::ios::end);
     if (archivo.tellp() == 0) {
         archivo << "SKU,Lote,Orden de venta,Piezas,CantidadConfirmada\n";
@@ -217,10 +220,11 @@ std::map<std::string, Producto> cargarProductosDesdeCSV(const std::string& archi
     return productos;
 }
 
-// Función auxiliar para procesar los mensajes (ya sea de Arduino o entrada manual)
+// Función auxiliar para procesar los mensajes.
 void processInputMessage(const std::string& mensaje, std::set<int>& pendientes,
                          std::map<int, int>& piezasOriginales, std::map<int, int>& piezasAjustadas,
-                         const std::string& sku, const std::string& lote, bool& sesionTerminada) {
+                         const std::string& sku, const std::string& lote, bool& sesionTerminada,
+                         const std::string& backorderFilename) {
     
     if (mensaje == "salir") {
         sesionTerminada = true;
@@ -236,7 +240,7 @@ void processInputMessage(const std::string& mensaje, std::set<int>& pendientes,
                 enviarAArduino("APAGAR_" + std::to_string(odvConfirmada));
                 int original = piezasOriginales.at(odvConfirmada);
                 int final_val = piezasAjustadas.at(odvConfirmada);
-                registrarBackorder(sku, odvConfirmada, original, final_val, lote);
+                registrarBackorder(backorderFilename, sku, odvConfirmada, original, final_val, lote);
                 std::cout << "CONFIRMADA: Orden de venta " << odvConfirmada << " con " << final_val << " piezas.\n";
             } else {
                 std::cout << "AVISO: Orden de venta " << odvConfirmada << " ya fue confirmada o no estaba pendiente.\n";
@@ -251,21 +255,20 @@ void processInputMessage(const std::string& mensaje, std::set<int>& pendientes,
                 int& actual = piezasAjustadas.at(destino);
                 int original = piezasOriginales.at(destino);
 
-                // --- INICIO DE LA LÓGICA MODIFICADA ---
+                // Contador cíclico
                 if (mensaje[0] == '+') {
                     if (actual >= original) {
                         actual = 0; // Si está en el máximo, pasa a 0
                     } else {
                         actual++;   // Si no, incrementa normalmente
                     }
-                } else { // mensaje[0] == '-'
+                } else {
                     if (actual <= 0) {
                         actual = original; // Si está en 0, pasa al máximo
                     } else {
-                        actual--;          // Si no, decrementa normally
+                        actual--;          // Si no, decrementa normalmente
                     }
                 }
-                // --- FIN DE LA LÓGICA MODIFICADA ---
 
                 std::cout << "[AJUSTE] Cantidad para O.V. " << destino << " es ahora: " << actual << std::endl;
                 enviarAArduino("ACTUALIZAR_" + std::to_string(destino) + "_" + std::to_string(actual));
@@ -292,12 +295,10 @@ bool hayEntradaEnConsola() {
     if (events > 0) {
         INPUT_RECORD buffer;
         DWORD a;
-        // Solo mira el primer evento para ver si es una tecla
         PeekConsoleInput(hInput, &buffer, 1, &a);
         if (buffer.EventType == KEY_EVENT && buffer.Event.KeyEvent.bKeyDown) {
             return true;
         } else {
-            // Si no es una tecla (ej. movimiento de ratón), lo consume para limpiar el buffer
             ReadConsoleInput(hInput, &buffer, 1, &a); 
             return false;
         }
@@ -306,7 +307,17 @@ bool hayEntradaEnConsola() {
 }
 
 int main() {
-    if (!inicializarPuertoSerial("\\\\.\\COM3")) { // Reemplaza con tu puerto COM
+    //Generación de nombre de archivo único para backorders
+    auto now = std::chrono::system_clock::now();
+    auto in_time_t = std::chrono::system_clock::to_time_t(now);
+    std::tm buf;
+    localtime_s(&buf, &in_time_t); // localtime_s para seguridad en Windows
+    std::stringstream ss;
+    ss << std::put_time(&buf, "backorders_%Y-%m-%d_%H-%M-%S.csv");
+    std::string backorderFilename = ss.str();
+    std::cout << "Los registros de esta sesion se guardaran en: " << backorderFilename << std::endl;
+
+    if (!inicializarPuertoSerial("\\\\.\\COM3")) {
         std::cout << "Presiona Enter para salir." << std::endl;
         std::cin.get();
         return 1;
@@ -382,24 +393,21 @@ int main() {
             std::cout << "\n--- Sesion de surtido iniciada. Esperando confirmaciones de botones. ---" << std::endl;
             std::cout << "--- Puede escribir 'salir' en la consola para cancelar este producto. ---\n" << std::endl;
 
-            // --- BUCLE DE PROCESAMIENTO PRINCIPAL (CORREGIDO) ---
             while (!pendientes.empty() && !sesionActualTerminada) {
-                // (1) Procesar todos los mensajes de Arduino en la cola (PRIORIDAD)
                 std::string mensajeRecibido;
                 while (!(mensajeRecibido = obtenerMensajeSerial()).empty()) {
-                    processInputMessage(mensajeRecibido, pendientes, piezasOriginales, piezasAjustadas, sku, lote, sesionActualTerminada);
+                    processInputMessage(mensajeRecibido, pendientes, piezasOriginales, piezasAjustadas, sku, lote, sesionActualTerminada, backorderFilename);
                     if (sesionActualTerminada) break;
                 }
                 if (sesionActualTerminada) break;
 
-                // (2) Revisar entrada manual de forma no bloqueante
                 if (hayEntradaEnConsola()) {
                     std::string inputManual;
-                    std::cin >> inputManual; // Lee una sola palabra, menos propenso a bloquearse
+                    std::cin >> inputManual; 
                     
                     inputManual = trim(inputManual);
                     if (!inputManual.empty()) {
-                         processInputMessage(inputManual, pendientes, piezasOriginales, piezasAjustadas, sku, lote, sesionActualTerminada);
+                         processInputMessage(inputManual, pendientes, piezasOriginales, piezasAjustadas, sku, lote, sesionActualTerminada, backorderFilename);
                     }
                 }
                 
@@ -410,7 +418,7 @@ int main() {
                 std::cout << "ADVERTENCIA: Se salio con O.V. activas. Apagando LEDs restantes y registrando como no confirmadas..." << std::endl;
                 for (int ov_restante : pendientes) {
                     enviarAArduino("APAGAR_" + std::to_string(ov_restante));
-                    registrarBackorder(sku, ov_restante, piezasOriginales[ov_restante], 0, lote); 
+                    registrarBackorder(backorderFilename, sku, ov_restante, piezasOriginales[ov_restante], 0, lote); 
                 }
             }
 
