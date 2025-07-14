@@ -1,6 +1,6 @@
 #include <LedControl.h> // Incluye la librería para el display MAX7219
 
-// --- CONFIGURACIÓN DE HARDWARE (BASADA EN TU CÓDIGO) ---
+// --- CONFIGURACIÓN DE HARDWARE ---
 
 // Configuración de pines para los displays MAX7219 en cadena
 #define DIN_PIN 42 // Pin de datos (DIN) del primer display
@@ -13,7 +13,7 @@ const int NUM_DESTINOS = 5;
 // Crea una instancia del objeto LedControl
 LedControl lc = LedControl(DIN_PIN, CLK_PIN, CS_PIN, NUM_DESTINOS);
 
-// --- MAPEO DE PINES (BASADO EN TU CÓDIGO) ---
+// --- MAPEO DE PINES ---
 int pinesLED[NUM_DESTINOS] = {22, 23, 24, 25, 26};
 int pinesBotonConfirmacion[NUM_DESTINOS] = {27, 28, 29, 30, 31};
 int pinesBotonIncremento[NUM_DESTINOS] = {32, 33, 34, 35, 36};

@@ -317,7 +317,7 @@ int main() {
     std::string backorderFilename = ss.str();
     std::cout << "Los registros de esta sesion se guardaran en: " << backorderFilename << std::endl;
 
-    if (!inicializarPuertoSerial("\\\\.\\COM3")) {
+    if (!inicializarPuertoSerial("\\\\.\\COM8")) {
         std::cout << "Presiona Enter para salir." << std::endl;
         std::cin.get();
         return 1;
