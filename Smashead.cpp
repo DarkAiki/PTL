@@ -317,7 +317,7 @@ int main() {
     std::string backorderFilename = ss.str();
     std::cout << "Los registros de esta sesion se guardaran en: " << backorderFilename << std::endl;
 
-    if (!inicializarPuertoSerial("\\\\.\\COM3")) {
+    if (!inicializarPuertoSerial("\\\\.\\COM8")) {
         std::cout << "Presiona Enter para salir." << std::endl;
         std::cin.get();
         return 1;
@@ -373,27 +373,50 @@ int main() {
                 continue;
             }
 
+// ... dentro de la función main, en el bucle 'while (continuarPrograma)'
+
             std::set<int> pendientes;
             std::map<int, int> piezasAjustadas;
             std::map<int, int> piezasOriginales;
 
             enviarAArduino("APAGAR_TODO");
+            std::this_thread::sleep_for(std::chrono::milliseconds(50)); // Pequeña pausa para que Arduino procese
 
+            // --- INICIO DE LA MODIFICACIÓN ---
+            // Este bucle ahora filtra las órdenes de venta.
             for (const auto& entrada : entradasValidas) {
                 int odv = entrada.ordenDeVenta;
-                pendientes.insert(odv);
-                piezasOriginales[odv] = entrada.piezas;
-                piezasAjustadas[odv] = entrada.piezas;
-                
-                std::cout << "ACTIVANDO O.V. " << odv << " - Piezas: " << entrada.piezas << std::endl;
-                enviarAArduino("ENCENDER_" + std::to_string(odv) + "_" + std::to_string(entrada.piezas));
+
+                // ¡AQUÍ ESTÁ EL FILTRO!
+                // Solo procesamos órdenes de venta que correspondan a un display físico (1-4).
+                if (odv >= 1 && odv <= 4) {
+                    pendientes.insert(odv);
+                    piezasOriginales[odv] = entrada.piezas;
+                    piezasAjustadas[odv] = entrada.piezas;
+                    
+                    // El mensaje es más claro: La O.V. #X se activa en el Display X.
+                    std::cout << "ACTIVANDO O.V. #" << odv << " en Display " << odv << " - Piezas: " << entrada.piezas << std::endl;
+                    enviarAArduino("ENCENDER_" + std::to_string(odv) + "_" + std::to_string(entrada.piezas));
+                } else {
+                    // Si la O.V. está fuera de rango, se notifica en consola y se ignora.
+                    std::cout << "ADVERTENCIA: La O.V. #" << odv << " del archivo CSV se ha ignorado (fuera del rango de displays 1-4)." << std::endl;
+                }
+            }
+            // --- FIN DE LA MODIFICACIÓN ---
+
+            // Añadimos una comprobación: si después del filtro no quedó ninguna orden
+            // pendiente, no tiene sentido iniciar la sesión de surtido.
+            if (pendientes.empty()) {
+                std::cout << "No hay órdenes de venta válidas (en el rango 1-4) para este producto. Volviendo al escaner." << std::endl;
+                continue; // Esta línea es importante, salta al siguiente escaneo de producto.
             }
 
             bool sesionActualTerminada = false;
-            std::cout << "\n--- Sesion de surtido iniciada. Esperando confirmaciones de botones. ---" << std::endl;
-            std::cout << "--- Puede escribir 'salir' en la consola para cancelar este producto. ---\n" << std::endl;
+            std::cout << "\n--- Sesion iniciada. Esperando confirmaciones. Escribe 'salir' para cancelar. ---\n" << std::endl;
 
+            // El resto del bucle de la sesión de surtido no necesita cambios...
             while (!pendientes.empty() && !sesionActualTerminada) {
+
                 std::string mensajeRecibido;
                 while (!(mensajeRecibido = obtenerMensajeSerial()).empty()) {
                     processInputMessage(mensajeRecibido, pendientes, piezasOriginales, piezasAjustadas, sku, lote, sesionActualTerminada, backorderFilename);
