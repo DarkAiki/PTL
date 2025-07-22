@@ -1,23 +1,23 @@
 #include <LedControl.h> // Incluye la librería para el display MAX7219
 
-// --- CONFIGURACIÓN DE HARDWARE (BASADA EN TU CÓDIGO) ---
+// --- CONFIGURACIÓN DE HARDWARE ---
 
 // Configuración de pines para los displays MAX7219 en cadena
-#define DIN_PIN 42 // Pin de datos (DIN) del primer display
-#define CLK_PIN 43 // Pin de reloj (CLK) para TODOS los displays
-#define CS_PIN  44 // Pin de selección (CS/LOAD) para TODOS los displays
+#define DIN_PIN 48 // Pin de datos (DIN) del primer display
+#define CLK_PIN 47 // Pin de reloj (CLK) para TODOS los displays
+#define CS_PIN  46 // Pin de selección (CS/LOAD) para TODOS los displays
 
 // Número total de destinos físicos (y módulos MAX7219)
-const int NUM_DESTINOS = 5;
+const int NUM_DESTINOS = 4;
 
 // Crea una instancia del objeto LedControl
 LedControl lc = LedControl(DIN_PIN, CLK_PIN, CS_PIN, NUM_DESTINOS);
 
-// --- MAPEO DE PINES (BASADO EN TU CÓDIGO) ---
-int pinesLED[NUM_DESTINOS] = {22, 23, 24, 25, 26};
-int pinesBotonConfirmacion[NUM_DESTINOS] = {27, 28, 29, 30, 31};
-int pinesBotonIncremento[NUM_DESTINOS] = {32, 33, 34, 35, 36};
-int pinesBotonDecremento[NUM_DESTINOS] = {37, 38, 39, 40, 41};
+// --- MAPEO DE PINES ---
+int pinesLED[NUM_DESTINOS] = {22, 23, 24, 25};
+int pinesBotonConfirmacion[NUM_DESTINOS] = {28, 29, 31, 32};
+int pinesBotonIncremento[NUM_DESTINOS] = {34, 35, 36, 37};
+int pinesBotonDecremento[NUM_DESTINOS] = {40, 41, 42, 43};
 
 // --- ESTRUCTURA DE CONTROL ---
 // Esta estructura nos permite asociar dinámicamente una Orden de Venta
@@ -34,7 +34,7 @@ struct Destino {
 
 Destino destinos[NUM_DESTINOS]; // Un arreglo de nuestros destinos físicos
 String comandoSerial = ""; // Buffer para la entrada serial
-const long DEBOUNCE_DELAY = 50; // 50ms para el antirrebote de botones
+const long DEBOUNCE_DELAY = 10; // Antirrebote de botones
 
 void setup() {
   Serial.begin(9600);
