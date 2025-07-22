@@ -1,16 +1,10 @@
 #include <LedControl.h> // Incluye la librería para el display MAX7219
 
 // --- CONFIGURACIÓN DE HARDWARE ---
-
-// Configuración de pines para los displays MAX7219 en cadena
-#define DIN_PIN 48 // Pin de datos (DIN) del primer display
-#define CLK_PIN 47 // Pin de reloj (CLK) para TODOS los displays
-#define CS_PIN  46 // Pin de selección (CS/LOAD) para TODOS los displays
-
-// Número total de destinos físicos (y módulos MAX7219)
+#define DIN_PIN 48
+#define CLK_PIN 47
+#define CS_PIN  46
 const int NUM_DESTINOS = 4;
-
-// Crea una instancia del objeto LedControl
 LedControl lc = LedControl(DIN_PIN, CLK_PIN, CS_PIN, NUM_DESTINOS);
 
 // --- MAPEO DE PINES ---
@@ -20,11 +14,9 @@ int pinesBotonIncremento[NUM_DESTINOS] = {34, 35, 36, 37};
 int pinesBotonDecremento[NUM_DESTINOS] = {40, 41, 42, 43};
 
 // --- ESTRUCTURA DE CONTROL ---
-// Esta estructura nos permite asociar dinámicamente una Orden de Venta
-// a un destino físico (un display, un LED, y sus botones).
 struct Destino {
-  int ordenDeVenta; // El número de la O.V. asignada. -1 si está libre.
-  bool estadoBotonConfirmacion; // Para el antirrebote (debounce)
+  int ordenDeVenta;
+  bool estadoBotonConfirmacion;
   unsigned long ultimoPulsoConfirmacion;
   bool estadoBotonMas;
   unsigned long ultimoPulsoMas;
@@ -32,86 +24,81 @@ struct Destino {
   unsigned long ultimoPulsoMenos;
 };
 
-Destino destinos[NUM_DESTINOS]; // Un arreglo de nuestros destinos físicos
-String comandoSerial = ""; // Buffer para la entrada serial
-const long DEBOUNCE_DELAY = 10; // Antirrebote de botones
+Destino destinos[NUM_DESTINOS];
+String comandoSerial = "";
+const long DEBOUNCE_DELAY = 50; // Aumentado ligeramente para mayor estabilidad
 
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(115200);
   comandoSerial.reserve(200);
 
-  // Inicializa cada módulo MAX7219 y la estructura de control
   for (int i = 0; i < NUM_DESTINOS; i++) {
-    // Configuración del display
-    lc.shutdown(i, false);      // Saca el display del modo de ahorro de energía
-    lc.setIntensity(i, 2);      // Establece el brillo (0-15)
-    lc.clearDisplay(i);         // Limpia el display
-
-    // Configuración de pines
+    lc.shutdown(i, false);
+    lc.setIntensity(i, 2);
+    lc.clearDisplay(i);
     pinMode(pinesLED[i], OUTPUT);
     digitalWrite(pinesLED[i], LOW);
     pinMode(pinesBotonConfirmacion[i], INPUT_PULLUP);
     pinMode(pinesBotonIncremento[i], INPUT_PULLUP);
     pinMode(pinesBotonDecremento[i], INPUT_PULLUP);
-
-    // Inicializa el estado del destino
-    destinos[i].ordenDeVenta = -1; // -1 significa que el destino está libre
+    destinos[i].ordenDeVenta = -1;
     destinos[i].estadoBotonConfirmacion = HIGH;
     destinos[i].estadoBotonMas = HIGH;
     destinos[i].estadoBotonMenos = HIGH;
   }
   
-  delay(1000); // Espera a que todo se estabilice
-  Serial.println("Arduino: Iniciado."); // Envía mensaje de confirmación a la PC
+  delay(1000);
+  Serial.println("Arduino: Iniciado.");
 }
 
 void loop() {
-  // 1. Revisa si hay comandos desde la PC
   if (Serial.available()) {
     char c = Serial.read();
     if (c == '\n') {
       procesarComando(comandoSerial);
-      comandoSerial = ""; // Limpia el comando para el siguiente
+      comandoSerial = "";
     } else {
-      comandoSerial += c; // Agrega el caracter al comando
+      comandoSerial += c;
     }
   }
-
-  // 2. Revisa el estado de los botones de cada destino
   revisarBotones();
 }
 
-// Procesa el comando recibido desde la PC
 void procesarComando(String cmd) {
   cmd.trim();
   if (cmd.length() == 0) return;
 
-  // Formato esperado: ENCENDER_ORDENDEVTA_PIEZAS (ej. "ENCENDER_101_15")
+  // --- INICIO DE LA CORRECCIÓN ---
   if (cmd.startsWith("ENCENDER_")) {
     int primerGuion = cmd.indexOf('_');
     int segundoGuion = cmd.lastIndexOf('_');
     int orden = cmd.substring(primerGuion + 1, segundoGuion).toInt();
     int piezas = cmd.substring(segundoGuion + 1).toInt();
     
-    // Busca un destino físico libre para asignarle esta orden de venta
-    int indiceDestino = buscarDestinoLibre();
-    if (indiceDestino != -1) {
-      destinos[indiceDestino].ordenDeVenta = orden;
+    // El número de la orden (1-4) determina directamente el display.
+    // Convertimos la orden (1-based) a un índice de array (0-based).
+    int indiceDestino = orden - 1;
+
+    // Verificamos que el índice sea válido para nuestro hardware (0 a 3)
+    if (indiceDestino >= 0 && indiceDestino < NUM_DESTINOS) {
+      // Asignamos la O.V. al destino físico correspondiente
+      destinos[indiceDestino].ordenDeVenta = orden; 
       mostrarNumero(piezas, indiceDestino);
       digitalWrite(pinesLED[indiceDestino], HIGH);
       Serial.println("CONFIRMACION_ENCENDIDO_" + String(orden));
     }
   } 
-  // Formato esperado: APAGAR_ORDENDEVTA (ej. "APAGAR_101")
+  // --- FIN DE LA CORRECCIÓN ---
+  
   else if (cmd.startsWith("APAGAR_")) {
     int orden = cmd.substring(7).toInt();
+    // La función buscarDestinoPorOrden sigue siendo correcta y necesaria aquí
     int indiceDestino = buscarDestinoPorOrden(orden);
     if (indiceDestino != -1) {
       apagarDestino(indiceDestino);
       Serial.println("CONFIRMACION_APAGADO_" + String(orden));
     }
   }
-  // Formato esperado: ACTUALIZAR_ORDENDEVTA_PIEZAS (ej. "ACTUALIZAR_101_14")
   else if (cmd.startsWith("ACTUALIZAR_")) {
     int primerGuion = cmd.indexOf('_');
     int segundoGuion = cmd.lastIndexOf('_');
@@ -122,33 +109,27 @@ void procesarComando(String cmd) {
       mostrarNumero(piezas, indiceDestino);
     }
   }
-  // Comando para apagar todos los displays y LEDs
   else if (cmd == "APAGAR_TODO") {
     for (int i = 0; i < NUM_DESTINOS; i++) {
-        apagarDestino(i);
+      apagarDestino(i);
     }
   }
 }
 
-// Revisa si alguno de los botones ha sido presionado
 void revisarBotones() {
   for (int i = 0; i < NUM_DESTINOS; i++) {
-    // Solo revisa botones de destinos que están en uso
     if (destinos[i].ordenDeVenta != -1) {
-      
-      // --- Botón de Confirmación ---
       bool lecturaConf = digitalRead(pinesBotonConfirmacion[i]);
       if (lecturaConf != destinos[i].estadoBotonConfirmacion && millis() - destinos[i].ultimoPulsoConfirmacion > DEBOUNCE_DELAY) {
-        if (lecturaConf == LOW) { // Se presionó el botón (flanco de bajada para PULLUP)
+        if (lecturaConf == LOW) {
           Serial.println("boton_" + String(destinos[i].ordenDeVenta));
           destinos[i].ultimoPulsoConfirmacion = millis();
         }
         destinos[i].estadoBotonConfirmacion = lecturaConf;
       }
       
-      // --- Botón de Suma (+) ---
       bool lecturaMas = digitalRead(pinesBotonIncremento[i]);
-       if (lecturaMas != destinos[i].estadoBotonMas && millis() - destinos[i].ultimoPulsoMas > DEBOUNCE_DELAY) {
+      if (lecturaMas != destinos[i].estadoBotonMas && millis() - destinos[i].ultimoPulsoMas > DEBOUNCE_DELAY) {
         if (lecturaMas == LOW) {
           Serial.println("+" + String(destinos[i].ordenDeVenta));
           destinos[i].ultimoPulsoMas = millis();
@@ -156,9 +137,8 @@ void revisarBotones() {
         destinos[i].estadoBotonMas = lecturaMas;
       }
 
-      // --- Botón de Resta (-) ---
       bool lecturaMenos = digitalRead(pinesBotonDecremento[i]);
-       if (lecturaMenos != destinos[i].estadoBotonMenos && millis() - destinos[i].ultimoPulsoMenos > DEBOUNCE_DELAY) {
+      if (lecturaMenos != destinos[i].estadoBotonMenos && millis() - destinos[i].ultimoPulsoMenos > DEBOUNCE_DELAY) {
         if (lecturaMenos == LOW) {
           Serial.println("-" + String(destinos[i].ordenDeVenta));
           destinos[i].ultimoPulsoMenos = millis();
@@ -169,60 +149,49 @@ void revisarBotones() {
   }
 }
 
-// --- Funciones de Ayuda ---
-
-// Muestra un número en un display específico, alineado a la derecha.
 void mostrarNumero(long numero, int indiceModulo) {
   if (indiceModulo < 0 || indiceModulo >= NUM_DESTINOS) return;
-
   lc.clearDisplay(indiceModulo);
-  
   if (numero == 0) {
     lc.setDigit(indiceModulo, 0, 0, false);
     return;
   }
-  
   bool negativo = (numero < 0);
   if (negativo) numero = -numero;
-  
   int digito = 0;
-  // Muestra los dígitos de derecha a izquierda (hasta 8)
   while (numero > 0 && digito < 8) {
     lc.setDigit(indiceModulo, digito, numero % 10, false);
     numero /= 10;
     digito++;
   }
-  
   if (negativo) {
     lc.setChar(indiceModulo, digito, '-', false);
   }
 }
 
-// Busca un destino que no esté siendo usado
+// La función buscarDestinoLibre ya no es necesaria para ENCENDER,
+// pero la dejamos por si se usa en otro lado o para futuras expansiones.
 int buscarDestinoLibre() {
   for (int i = 0; i < NUM_DESTINOS; i++) {
     if (destinos[i].ordenDeVenta == -1) {
-      return i; // Retorna el índice del primer destino físico libre
+      return i;
     }
   }
-  return -1; // No hay destinos libres
+  return -1;
 }
 
-// Busca un destino por su número de orden de venta
 int buscarDestinoPorOrden(int orden) {
   for (int i = 0; i < NUM_DESTINOS; i++) {
     if (destinos[i].ordenDeVenta == orden) {
-      return i; // Retorna el índice del destino físico encontrado
+      return i;
     }
   }
-  return -1; // No se encontró la orden
+  return -1;
 }
 
-// Apaga y resetea un destino físico específico
 void apagarDestino(int indice) {
   if (indice < 0 || indice >= NUM_DESTINOS) return;
-  
-  destinos[indice].ordenDeVenta = -1; // Marca el destino como libre
-  mostrarNumero(0, indice);
+  destinos[indice].ordenDeVenta = -1;
+  lc.clearDisplay(indice);
   digitalWrite(pinesLED[indice], LOW);
 }
