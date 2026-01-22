@@ -1,197 +1,218 @@
-#include <LedControl.h> // Incluye la librería para el display MAX7219
+#include <Wire.h>
+#include <TM1637Display.h>
 
-// --- CONFIGURACIÓN DE HARDWARE ---
-#define DIN_PIN 48
-#define CLK_PIN 47
-#define CS_PIN  46
-const int NUM_DESTINOS = 4;
-LedControl lc = LedControl(DIN_PIN, CLK_PIN, CS_PIN, NUM_DESTINOS);
+/* * CONFIGURACIÓN DE HARDWARE MULTI-MODULO
+ * v5.1 - Corrección de Lógica LED (Active HIGH)
+ */
 
-// --- MAPEO DE PINES ---
-int pinesLED[NUM_DESTINOS] = {22, 23, 24, 25};
-int pinesBotonConfirmacion[NUM_DESTINOS] = {28, 29, 31, 32};
-int pinesBotonIncremento[NUM_DESTINOS] = {34, 35, 36, 37};
-int pinesBotonDecremento[NUM_DESTINOS] = {40, 41, 42, 43};
+// --- CONFIGURACIÓN DE CANTIDAD DE DESTINOS ---
+const int NUM_DESTINOS = 2; 
 
-// --- ESTRUCTURA DE CONTROL ---
-struct Destino {
-  int ordenDeVenta;
-  bool estadoBotonConfirmacion;
-  unsigned long ultimoPulsoConfirmacion;
-  bool estadoBotonMas;
-  unsigned long ultimoPulsoMas;
-  bool estadoBotonMenos;
-  unsigned long ultimoPulsoMenos;
+// Estructura que define un Módulo PTL completo
+struct ModuloPTL {
+  int id;                  
+  int pinClk;              
+  int pinDio;              
+  byte pcfAddr;            
+  
+  TM1637Display* displayObj; 
+  int cantidad;            
+  bool activo;             
+  byte estadoPCF;          
 };
 
-Destino destinos[NUM_DESTINOS];
-String comandoSerial = "";
-const long DEBOUNCE_DELAY = 50; // Aumentado ligeramente para mayor estabilidad
+// --- MAPEO DE HARDWARE ---
+ModuloPTL destinos[NUM_DESTINOS] = {
+  // { ID, CLK, DIO, DIRECCION_I2C, ... }
+  { 1, 26, 27, 0x20, NULL, 0, false, 0xF7 }, // Inicializamos estado en 0xF7 (LED apagado/LOW)
+  { 2, 28, 29, 0x21, NULL, 0, false, 0xF7 } 
+};
+
+// Máscaras de bits
+const byte MASK_BTN_CONFIRM = 0x01; // P0
+const byte MASK_BTN_UP      = 0x02; // P1
+const byte MASK_BTN_DOWN    = 0x04; // P2
+const byte MASK_LED_AVISO   = 0x08; // P3
+
+String inputString = "";
 
 void setup() {
-  Serial.begin(115200);
-  comandoSerial.reserve(200);
+  Serial.begin(9600); 
+  inputString.reserve(100);
+  Wire.begin();
 
+  // Inicializar cada módulo configurado
   for (int i = 0; i < NUM_DESTINOS; i++) {
-    lc.shutdown(i, false);
-    lc.setIntensity(i, 2);
-    lc.clearDisplay(i);
-    pinMode(pinesLED[i], OUTPUT);
-    digitalWrite(pinesLED[i], LOW);
-    pinMode(pinesBotonConfirmacion[i], INPUT_PULLUP);
-    pinMode(pinesBotonIncremento[i], INPUT_PULLUP);
-    pinMode(pinesBotonDecremento[i], INPUT_PULLUP);
-    destinos[i].ordenDeVenta = -1;
-    destinos[i].estadoBotonConfirmacion = HIGH;
-    destinos[i].estadoBotonMas = HIGH;
-    destinos[i].estadoBotonMenos = HIGH;
+    destinos[i].displayObj = new TM1637Display(destinos[i].pinClk, destinos[i].pinDio);
+    destinos[i].displayObj->setBrightness(0x0f);
+    
+    // Inicializar PCF8574
+    // IMPORTANTE: Ponemos P0-P2 en HIGH (1) para que funcionen como entradas.
+    // Ponemos P3 en LOW (0) para que el LED inicie APAGADO.
+    // 1111 0111 = 0xF7
+    actualizarPCF(i, 0xF7); 
+    
+    // Test visual rápido
+    uint8_t allOn[] = { 0xff, 0xff, 0xff, 0xff };
+    destinos[i].displayObj->setSegments(allOn);
+    delay(200);
+    mostrarEspera(i);
   }
-  
-  delay(1000);
-  Serial.println("Arduino: Iniciado.");
+
+  Serial.println(F("SYSTEM_READY"));
 }
 
 void loop() {
-  if (Serial.available()) {
-    char c = Serial.read();
-    if (c == '\n') {
-      procesarComando(comandoSerial);
-      comandoSerial = "";
-    } else {
-      comandoSerial += c;
+  verificarComandosSeriales();
+  
+  for (int i = 0; i < NUM_DESTINOS; i++) {
+    if (destinos[i].activo) {
+      gestionarBotones(i);
     }
   }
-  revisarBotones();
+}
+
+void actualizarPCF(int idx, byte nuevoEstado) {
+  destinos[idx].estadoPCF = nuevoEstado;
+  Wire.beginTransmission(destinos[idx].pcfAddr);
+  Wire.write(destinos[idx].estadoPCF);
+  Wire.endTransmission();
+}
+
+// CORRECCIÓN AQUÍ: Invertimos la lógica
+void setLed(int idx, bool on) {
+  if (on) {
+    // Queremos Encender -> Enviamos HIGH (1) al bit P3
+    // Usamos OR para poner el bit en 1
+    destinos[idx].estadoPCF |= MASK_LED_AVISO; 
+  } else {
+    // Queremos Apagar -> Enviamos LOW (0) al bit P3
+    // Usamos AND con el inverso para poner el bit en 0
+    destinos[idx].estadoPCF &= ~MASK_LED_AVISO; 
+  }
+  actualizarPCF(idx, destinos[idx].estadoPCF);
+}
+
+void gestionarBotones(int i) {
+  Wire.requestFrom(destinos[i].pcfAddr, (uint8_t)1);
+  if (Wire.available()) {
+    byte lectura = Wire.read();
+    
+    // --- BOTÓN CONFIRMAR (P0) ---
+    if (!(lectura & MASK_BTN_CONFIRM)) {
+      delay(50); 
+      Wire.requestFrom(destinos[i].pcfAddr, (uint8_t)1);
+      if (!(Wire.read() & MASK_BTN_CONFIRM)) {
+        confirmarDestino(i);
+        do { Wire.requestFrom(destinos[i].pcfAddr, (uint8_t)1); delay(10); } 
+        while (!(Wire.read() & MASK_BTN_CONFIRM));
+      }
+    }
+    
+    // --- BOTÓN SUBIR (P1) ---
+    else if (!(lectura & MASK_BTN_UP)) {
+      delay(150);
+      Serial.print(F("+")); Serial.println(destinos[i].id);
+      destinos[i].cantidad++;
+      destinos[i].displayObj->showNumberDec(destinos[i].cantidad);
+      do { Wire.requestFrom(destinos[i].pcfAddr, (uint8_t)1); delay(10); } 
+      while (!(Wire.read() & MASK_BTN_UP));
+    }
+    
+    // --- BOTÓN BAJAR (P2) ---
+    else if (!(lectura & MASK_BTN_DOWN)) {
+      delay(150);
+      Serial.print(F("-")); Serial.println(destinos[i].id);
+      if (destinos[i].cantidad > 0) {
+          destinos[i].cantidad--;
+          destinos[i].displayObj->showNumberDec(destinos[i].cantidad);
+      }
+      do { Wire.requestFrom(destinos[i].pcfAddr, (uint8_t)1); delay(10); } 
+      while (!(Wire.read() & MASK_BTN_DOWN));
+    }
+  }
+}
+
+void verificarComandosSeriales() {
+  while (Serial.available()) {
+    char inChar = (char)Serial.read();
+    if (inChar == '\n') {
+      procesarComando(inputString);
+      inputString = "";
+    } else {
+      inputString += inChar;
+    }
+  }
 }
 
 void procesarComando(String cmd) {
   cmd.trim();
-  if (cmd.length() == 0) return;
-
-  // --- INICIO DE LA CORRECCIÓN ---
-  if (cmd.startsWith("ENCENDER_")) {
-    int primerGuion = cmd.indexOf('_');
-    int segundoGuion = cmd.lastIndexOf('_');
-    int orden = cmd.substring(primerGuion + 1, segundoGuion).toInt();
-    int piezas = cmd.substring(segundoGuion + 1).toInt();
-    
-    // El número de la orden (1-4) determina directamente el display.
-    // Convertimos la orden (1-based) a un índice de array (0-based).
-    int indiceDestino = orden - 1;
-
-    // Verificamos que el índice sea válido para nuestro hardware (0 a 3)
-    if (indiceDestino >= 0 && indiceDestino < NUM_DESTINOS) {
-      // Asignamos la O.V. al destino físico correspondiente
-      destinos[indiceDestino].ordenDeVenta = orden; 
-      mostrarNumero(piezas, indiceDestino);
-      digitalWrite(pinesLED[indiceDestino], HIGH);
-      Serial.println("CONFIRMACION_ENCENDIDO_" + String(orden));
-    }
-  } 
-  // --- FIN DE LA CORRECCIÓN ---
+  int firstUnderscore = cmd.indexOf('_');
+  int lastUnderscore = cmd.lastIndexOf('_');
   
-  else if (cmd.startsWith("APAGAR_")) {
-    int orden = cmd.substring(7).toInt();
-    // La función buscarDestinoPorOrden sigue siendo correcta y necesaria aquí
-    int indiceDestino = buscarDestinoPorOrden(orden);
-    if (indiceDestino != -1) {
-      apagarDestino(indiceDestino);
-      Serial.println("CONFIRMACION_APAGADO_" + String(orden));
-    }
-  }
-  else if (cmd.startsWith("ACTUALIZAR_")) {
-    int primerGuion = cmd.indexOf('_');
-    int segundoGuion = cmd.lastIndexOf('_');
-    int orden = cmd.substring(primerGuion + 1, segundoGuion).toInt();
-    int piezas = cmd.substring(segundoGuion + 1).toInt();
-    int indiceDestino = buscarDestinoPorOrden(orden);
-    if (indiceDestino != -1) {
-      mostrarNumero(piezas, indiceDestino);
-    }
-  }
-  else if (cmd == "APAGAR_TODO") {
-    for (int i = 0; i < NUM_DESTINOS; i++) {
-      apagarDestino(i);
-    }
-  }
-}
+  if (firstUnderscore != -1) {
+    String accion = cmd.substring(0, firstUnderscore);
+    int targetId; 
+    int qty = 0;
 
-void revisarBotones() {
-  for (int i = 0; i < NUM_DESTINOS; i++) {
-    if (destinos[i].ordenDeVenta != -1) {
-      bool lecturaConf = digitalRead(pinesBotonConfirmacion[i]);
-      if (lecturaConf != destinos[i].estadoBotonConfirmacion && millis() - destinos[i].ultimoPulsoConfirmacion > DEBOUNCE_DELAY) {
-        if (lecturaConf == LOW) {
-          Serial.println("boton_" + String(destinos[i].ordenDeVenta));
-          destinos[i].ultimoPulsoConfirmacion = millis();
-        }
-        destinos[i].estadoBotonConfirmacion = lecturaConf;
-      }
-      
-      bool lecturaMas = digitalRead(pinesBotonIncremento[i]);
-      if (lecturaMas != destinos[i].estadoBotonMas && millis() - destinos[i].ultimoPulsoMas > DEBOUNCE_DELAY) {
-        if (lecturaMas == LOW) {
-          Serial.println("+" + String(destinos[i].ordenDeVenta));
-          destinos[i].ultimoPulsoMas = millis();
-        }
-        destinos[i].estadoBotonMas = lecturaMas;
-      }
-
-      bool lecturaMenos = digitalRead(pinesBotonDecremento[i]);
-      if (lecturaMenos != destinos[i].estadoBotonMenos && millis() - destinos[i].ultimoPulsoMenos > DEBOUNCE_DELAY) {
-        if (lecturaMenos == LOW) {
-          Serial.println("-" + String(destinos[i].ordenDeVenta));
-          destinos[i].ultimoPulsoMenos = millis();
-        }
-        destinos[i].estadoBotonMenos = lecturaMenos;
+    if (lastUnderscore != firstUnderscore) {
+      targetId = cmd.substring(firstUnderscore + 1, lastUnderscore).toInt();
+      qty = cmd.substring(lastUnderscore + 1).toInt();
+    } else {
+      targetId = cmd.substring(firstUnderscore + 1).toInt();
+    }
+    
+    int idx = -1;
+    for(int i=0; i<NUM_DESTINOS; i++) {
+      if(destinos[i].id == targetId) {
+        idx = i;
+        break;
       }
     }
-  }
-}
 
-void mostrarNumero(long numero, int indiceModulo) {
-  if (indiceModulo < 0 || indiceModulo >= NUM_DESTINOS) return;
-  lc.clearDisplay(indiceModulo);
-  if (numero == 0) {
-    lc.setDigit(indiceModulo, 0, 0, false);
-    return;
-  }
-  bool negativo = (numero < 0);
-  if (negativo) numero = -numero;
-  int digito = 0;
-  while (numero > 0 && digito < 8) {
-    lc.setDigit(indiceModulo, digito, numero % 10, false);
-    numero /= 10;
-    digito++;
-  }
-  if (negativo) {
-    lc.setChar(indiceModulo, digito, '-', false);
-  }
-}
-
-// La función buscarDestinoLibre ya no es necesaria para ENCENDER,
-// pero la dejamos por si se usa en otro lado o para futuras expansiones.
-int buscarDestinoLibre() {
-  for (int i = 0; i < NUM_DESTINOS; i++) {
-    if (destinos[i].ordenDeVenta == -1) {
-      return i;
+    if (idx != -1) {
+      if (accion == "ENCENDER" || accion == "ACTUALIZAR") {
+        destinos[idx].cantidad = qty;
+        destinos[idx].activo = true;
+        destinos[idx].displayObj->showNumberDec(qty);
+        setLed(idx, true); // <--- Esto ahora mandará HIGH para encender
+      } 
+      else if (accion == "APAGAR" || accion == "APAGAR_DESTINO") { 
+        resetModulo(idx);
+      }
+    } else {
+       if (cmd == "APAGAR_TODO") {
+         for(int i=0; i<NUM_DESTINOS; i++) resetModulo(i);
+       }
     }
+  } else if (cmd == "APAGAR_TODO") {
+      for(int i=0; i<NUM_DESTINOS; i++) resetModulo(i);
   }
-  return -1;
 }
 
-int buscarDestinoPorOrden(int orden) {
-  for (int i = 0; i < NUM_DESTINOS; i++) {
-    if (destinos[i].ordenDeVenta == orden) {
-      return i;
-    }
-  }
-  return -1;
+void confirmarDestino(int idx) {
+  Serial.print(F("boton_"));
+  Serial.println(destinos[idx].id);
+  
+  uint8_t done[] = { 
+    SEG_B | SEG_C | SEG_D | SEG_E | SEG_G,          // d
+    SEG_A | SEG_B | SEG_C | SEG_D | SEG_E | SEG_F,  // O
+    SEG_C | SEG_E | SEG_G,                          // n
+    SEG_A | SEG_D | SEG_E | SEG_F | SEG_G           // E
+  };
+  destinos[idx].displayObj->setSegments(done);
+  delay(500);
+  resetModulo(idx);
 }
 
-void apagarDestino(int indice) {
-  if (indice < 0 || indice >= NUM_DESTINOS) return;
-  destinos[indice].ordenDeVenta = -1;
-  lc.clearDisplay(indice);
-  digitalWrite(pinesLED[indice], LOW);
+void resetModulo(int idx) {
+  destinos[idx].activo = false;
+  destinos[idx].cantidad = 0;
+  setLed(idx, false); // <--- Esto ahora mandará LOW para apagar
+  mostrarEspera(idx);
+}
+
+void mostrarEspera(int idx) {
+  uint8_t seg[] = { SEG_G, SEG_G, SEG_G, SEG_G }; // ----
+  destinos[idx].displayObj->setSegments(seg);
 }
