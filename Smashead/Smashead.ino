@@ -37,9 +37,14 @@ const byte MASK_LED_AVISO   = 0x08; // P3
 String inputString = "";
 
 void setup() {
-  Serial.begin(9600); 
+  Serial.begin(115200); // ACTUALIZADO: A 115200 baudios
   inputString.reserve(100);
   Wire.begin();
+
+  // NUEVO: Prevención de bloqueos (Anti-Freeze) igual que en el test
+  #if defined(ARDUINO_ARCH_AVR)
+    Wire.setWireTimeout(3000, true); 
+  #endif
 
   // Inicializar cada módulo configurado
   for (int i = 0; i < NUM_DESTINOS; i++) {

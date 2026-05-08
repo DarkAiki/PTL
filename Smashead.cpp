@@ -19,7 +19,7 @@
 
 // --- CONFIGURACION FIJA ---
 const std::string PUERTO_SERIAL_DEFAULT = "COM8"; 
-#define BAUDRATE 9600
+#define BAUDRATE 115200
 #define MAX_BUFFER_SIZE 256
 // --------------------------
 
